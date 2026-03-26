@@ -15,12 +15,15 @@
 #define ECHO_PIN   18  // Ultrasonic Echo
 
 // -- Default API URL (fallback if no config saved in flash) --
-const String DEFAULT_API_URL = "http://smart-farm.test/api/sensor-data";
+const String DEFAULT_API_URL   = "http://smart-farm.test/api/sensor-data";
+const String DEFAULT_CONFIG_URL = "http://smart-farm.test/api/config";
 
 DHT dht(DHTPIN, DHTTYPE);
 WebServer server(80);
 String laravel_api_url = DEFAULT_API_URL;
 String lastStatus = "Waiting for first sync...";
+long currentInterval = 300000; // ms — updated by server each cycle
+float tankHeightCm   = 20.0;  // cm — loaded from /api/config on boot
 
 // --- Ultrasonic: returns distance in cm ---
 float getWaterLevel() {
@@ -31,6 +34,47 @@ float getWaterLevel() {
   digitalWrite(TRIG_PIN, LOW);
   long duration = pulseIn(ECHO_PIN, HIGH, 30000); // 30ms timeout
   return duration * 0.034 / 2;
+}
+
+// Derive config URL from the sensor URL (replace "/sensor-data" with "/config")
+String configUrl() {
+  String url = laravel_api_url;
+  int pos = url.lastIndexOf("/sensor-data");
+  if (pos >= 0) { url = url.substring(0, pos) + "/config"; }
+  return url;
+}
+
+// Fetch device config from server once on boot; persists in LittleFS
+void fetchConfig() {
+  HTTPClient http;
+  http.setTimeout(5000);
+  http.begin(configUrl());
+  int code = http.GET();
+
+  if (code == 200) {
+    StaticJsonDocument<128> doc;
+    DeserializationError err = deserializeJson(doc, http.getString());
+    if (!err) {
+      tankHeightCm = doc["tank_height_cm"] | 20.0;
+      Serial.println("Config loaded — tank_height_cm: " + String(tankHeightCm) + "cm");
+
+      // Persist to flash so the value survives reboots without network
+      File f = LittleFS.open("/device_config.txt", "w");
+      f.print(tankHeightCm);
+      f.close();
+    }
+  } else {
+    Serial.println("Config fetch failed (" + String(code) + ") — trying flash");
+    if (LittleFS.exists("/device_config.txt")) {
+      File f = LittleFS.open("/device_config.txt", "r");
+      tankHeightCm = f.readString().toFloat();
+      f.close();
+      if (tankHeightCm <= 0) { tankHeightCm = 20.0; }
+      Serial.println("Config from flash — tank_height_cm: " + String(tankHeightCm) + "cm");
+    }
+  }
+
+  http.end();
 }
 
 void setup() {
@@ -64,6 +108,7 @@ void setup() {
   if (!wm.autoConnect("Smart-Plant")) ESP.restart();
 
   Serial.println("WiFi connected. API URL: " + laravel_api_url);
+  fetchConfig();
 
   // --- Debug UI ---
   server.on("/", []() {
@@ -76,11 +121,16 @@ void setup() {
     html += "<p><b>Temp:</b> "        + String(dht.readTemperature()) + " &deg;C</p>";
     html += "<p><b>Humidity:</b> "    + String(dht.readHumidity())    + " %</p>";
     html += "<p><b>Last sync:</b> "   + lastStatus                    + "</p>";
+    html += "<p><b>Send interval:</b> " + String(currentInterval / 1000) + "s (20=alert, 300=normal)</p>";
+    html += "<p><b>Tank threshold:</b> " + String(tankHeightCm) + "cm (from server)</p>";
     html += "<hr>";
     html += "<form action='/update' method='POST'>"
               "API URL:<br>"
               "<input name='url' style='width:90%' value='" + laravel_api_url + "'><br><br>"
               "<input type='submit' value='Save URL'>"
+            "</form>";
+    html += "<br><form action='/reload-config' method='POST'>"
+              "<input type='submit' value='Reload Config from Server'>"
             "</form>";
     html += "<br><form action='/reset' method='POST'>"
               "<input type='submit' value='Reset to Default URL' style='color:red'"
@@ -105,6 +155,12 @@ void setup() {
     server.send(200, "text/plain", "URL saved: " + laravel_api_url);
   });
 
+  // Re-fetch config from server without rebooting
+  server.on("/reload-config", HTTP_POST, []() {
+    fetchConfig();
+    server.send(200, "text/plain", "Config reloaded — tank_height_cm: " + String(tankHeightCm) + "cm");
+  });
+
   // Reset URL back to the hardcoded default
   server.on("/reset", HTTP_POST, []() {
     laravel_api_url = DEFAULT_API_URL;
@@ -120,9 +176,10 @@ void loop() {
   server.handleClient();
 
   static unsigned long lastTime = 0;
-  const long interval = 20000; // Send every 20 seconds
-
-  if (millis() - lastTime > interval) {
+  // Interval is set dynamically by the server:
+  //   20s  — alert mode (soil dry, pump running, or tank empty)
+  //   300s — normal mode (plant is healthy)
+  if (millis() - lastTime > (unsigned long)currentInterval) {
     lastTime = millis();
 
     float temp          = dht.readTemperature();
@@ -136,8 +193,8 @@ void loop() {
       return;
     }
 
-    // SAFETY: tank empty if sensor timed out (0) or distance > 20 cm
-    bool tankEmpty = (waterDistance <= 0 || waterDistance > 20.0);
+    // SAFETY: tank empty if sensor timed out (0) or distance exceeds threshold
+    bool tankEmpty = (waterDistance <= 0 || waterDistance > tankHeightCm);
 
     HTTPClient http;
     http.setTimeout(5000);
@@ -176,6 +233,11 @@ void loop() {
           digitalWrite(RELAY_PIN, LOW);
           lastStatus = "Pump OFF (at " + String(millis() / 1000) + "s)";
         }
+
+        // Server tells us how long to wait before the next send
+        long serverInterval = recvDoc["next_interval"] | 300;
+        currentInterval = serverInterval * 1000L;
+        Serial.println("Next interval: " + String(serverInterval) + "s");
       } else {
         digitalWrite(RELAY_PIN, LOW); // Safe default on parse failure
         lastStatus = "JSON parse error — pump OFF";
