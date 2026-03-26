@@ -9,14 +9,14 @@
 #define SOIL_PIN   34
 #define RAIN_PIN   32
 #define DHTPIN     4
-#define DHTTYPE    DHT11
+#define DHTTYPE    DHT22  // Change to DHT11 if your sensor is a DHT11
 #define RELAY_PIN  25
 #define TRIG_PIN   5   // Ultrasonic Trig
 #define ECHO_PIN   18  // Ultrasonic Echo
 
 // -- Default API URL (fallback if no config saved in flash) --
-const String DEFAULT_API_URL   = "http://smart-farm.test/api/sensor-data";
-const String DEFAULT_CONFIG_URL = "http://smart-farm.test/api/config";
+const String DEFAULT_API_URL   = "http://10.52.144.50:8000/api/sensor-data";
+const String DEFAULT_CONFIG_URL = "http://10.52.144.50:8000/api/config";
 
 DHT dht(DHTPIN, DHTTYPE);
 WebServer server(80);
