@@ -112,30 +112,83 @@ void setup() {
 
   // --- Debug UI ---
   server.on("/", []() {
-    String html = "<html><head><meta http-equiv='refresh' content='5'></head>"
-                  "<body style='font-family:sans-serif;text-align:center;max-width:480px;margin:auto;'>";
-    html += "<h2>Smart Plant &mdash; Debug</h2>";
-    html += "<p><b>Soil (raw):</b> "  + String(analogRead(SOIL_PIN))  + "</p>";
-    html += "<p><b>Rain (raw):</b> "  + String(analogRead(RAIN_PIN))  + "</p>";
-    html += "<p><b>Water dist:</b> "  + String(getWaterLevel())       + " cm</p>";
-    html += "<p><b>Temp:</b> "        + String(dht.readTemperature()) + " &deg;C</p>";
-    html += "<p><b>Humidity:</b> "    + String(dht.readHumidity())    + " %</p>";
-    html += "<p><b>Last sync:</b> "   + lastStatus                    + "</p>";
-    html += "<p><b>Send interval:</b> " + String(currentInterval / 1000) + "s (20=alert, 300=normal)</p>";
-    html += "<p><b>Tank threshold:</b> " + String(tankHeightCm) + "cm (from server)</p>";
-    html += "<hr>";
+    bool usingDefault = (laravel_api_url == DEFAULT_API_URL);
+    String urlSource  = usingDefault ? "default (not customised)" : "saved in flash";
+
+    String html =
+      "<html><head>"
+      "<meta http-equiv='refresh' content='10'>"
+      "<meta name='viewport' content='width=device-width,initial-scale=1'>"
+      "<style>"
+        "body{font-family:sans-serif;max-width:520px;margin:2rem auto;padding:0 1rem;color:#e5e7eb;background:#111827;}"
+        "h2{font-size:1.1rem;margin:0 0 1.2rem;color:#fff;}"
+        "h3{font-size:.75rem;text-transform:uppercase;letter-spacing:.08em;color:#6b7280;margin:1.2rem 0 .5rem;}"
+        ".card{background:#1f2937;border:1px solid #374151;border-radius:.75rem;padding:1rem;margin-bottom:.75rem;}"
+        ".row{display:flex;justify-content:space-between;align-items:baseline;padding:.3rem 0;border-bottom:1px solid #374151;font-size:.8rem;}"
+        ".row:last-child{border-bottom:none;}"
+        ".label{color:#9ca3af;}"
+        ".value{color:#fff;font-weight:500;text-align:right;word-break:break-all;max-width:65%;}"
+        ".value.mono{font-family:monospace;font-size:.75rem;color:#34d399;}"
+        ".value.warn{color:#fbbf24;}"
+        "input[type=text]{width:100%;box-sizing:border-box;background:#111827;border:1px solid #374151;border-radius:.5rem;padding:.5rem .75rem;color:#fff;font-size:.8rem;margin:.4rem 0;}"
+        "button,input[type=submit]{width:100%;padding:.55rem;border:none;border-radius:.5rem;font-size:.8rem;font-weight:600;cursor:pointer;margin-top:.4rem;}"
+        ".btn-primary{background:#10b981;color:#fff;}"
+        ".btn-secondary{background:#374151;color:#d1d5db;}"
+        ".btn-danger{background:#7f1d1d;color:#fca5a5;}"
+        ".tag{display:inline-block;font-size:.65rem;padding:.15rem .5rem;border-radius:.3rem;margin-left:.4rem;vertical-align:middle;}"
+        ".tag-default{background:#1f2937;border:1px solid #374151;color:#6b7280;}"
+        ".tag-custom{background:#064e3b;border:1px solid #065f46;color:#6ee7b7;}"
+      "</style>"
+      "</head>"
+      "<body>"
+      "<h2>&#127807; Smart Plant &mdash; Device</h2>";
+
+    // --- Stored Config ---
+    html += "<h3>Stored Configuration</h3>";
+    html += "<div class='card'>";
+    html += "<div class='row'><span class='label'>API URL</span>"
+            "<span class='value mono'>" + laravel_api_url +
+            "<span class='tag " + String(usingDefault ? "tag-default" : "tag-custom") + "'>"
+            + urlSource + "</span></span></div>";
+    html += "<div class='row'><span class='label'>Tank empty threshold</span>"
+            "<span class='value'>" + String(tankHeightCm) + " cm <small style='color:#6b7280'>(from server)</small></span></div>";
+    html += "<div class='row'><span class='label'>Send interval</span>"
+            "<span class='value " + String(currentInterval <= 20000 ? "warn" : "") + "'>"
+            + String(currentInterval / 1000) + "s "
+            "<small style='color:#6b7280'>" + String(currentInterval <= 20000 ? "alert mode" : "normal mode") + "</small></span></div>";
+    html += "<div class='row'><span class='label'>Default URL</span>"
+            "<span class='value mono'>" + DEFAULT_API_URL + "</span></div>";
+    html += "</div>";
+
+    // --- Live Sensors ---
+    html += "<h3>Live Sensor Readings</h3>";
+    html += "<div class='card'>";
+    html += "<div class='row'><span class='label'>Soil moisture (raw ADC)</span><span class='value'>" + String(analogRead(SOIL_PIN)) + "</span></div>";
+    html += "<div class='row'><span class='label'>Rain (raw ADC)</span><span class='value'>" + String(analogRead(RAIN_PIN)) + "</span></div>";
+    html += "<div class='row'><span class='label'>Water distance</span><span class='value'>" + String(getWaterLevel()) + " cm</span></div>";
+    html += "<div class='row'><span class='label'>Temperature</span><span class='value'>" + String(dht.readTemperature()) + " &deg;C</span></div>";
+    html += "<div class='row'><span class='label'>Humidity</span><span class='value'>" + String(dht.readHumidity()) + " %</span></div>";
+    html += "<div class='row'><span class='label'>Last sync</span><span class='value'>" + lastStatus + "</span></div>";
+    html += "</div>";
+
+    // --- Actions ---
+    html += "<h3>Actions</h3>";
+    html += "<div class='card'>";
     html += "<form action='/update' method='POST'>"
-              "API URL:<br>"
-              "<input name='url' style='width:90%' value='" + laravel_api_url + "'><br><br>"
-              "<input type='submit' value='Save URL'>"
+              "<label style='font-size:.75rem;color:#9ca3af'>Change API URL</label>"
+              "<input type='text' name='url' value='" + laravel_api_url + "'>"
+              "<input type='submit' class='btn-primary' value='Save URL'>"
             "</form>";
-    html += "<br><form action='/reload-config' method='POST'>"
-              "<input type='submit' value='Reload Config from Server'>"
+    html += "<form action='/reload-config' method='POST' style='margin-top:.6rem'>"
+              "<input type='submit' class='btn-secondary' value='Reload Config from Server'>"
             "</form>";
-    html += "<br><form action='/reset' method='POST'>"
-              "<input type='submit' value='Reset to Default URL' style='color:red'"
+    html += "<form action='/reset' method='POST' style='margin-top:.4rem'>"
+              "<input type='submit' class='btn-danger' value='Reset to Default URL'"
               " onclick=\"return confirm('Reset URL to default?')\">"
             "</form>";
+    html += "</div>";
+
+    html += "<p style='font-size:.65rem;color:#4b5563;text-align:center'>Auto-refreshes every 10s</p>";
     html += "</body></html>";
     server.send(200, "text/html", html);
   });
@@ -201,13 +254,15 @@ void loop() {
     http.begin(laravel_api_url);
     http.addHeader("Content-Type", "application/json");
 
-    StaticJsonDocument<300> sendDoc;
-    sendDoc["moisture"]    = analogRead(SOIL_PIN);
-    sendDoc["rain"]        = analogRead(RAIN_PIN);
-    sendDoc["temp"]        = temp;
-    sendDoc["humidity"]    = humidity;
-    sendDoc["water_dist"]  = waterDistance;
-    sendDoc["tank_status"] = tankEmpty ? "EMPTY" : "OK";
+    StaticJsonDocument<512> sendDoc;
+    sendDoc["moisture"]              = analogRead(SOIL_PIN);
+    sendDoc["rain"]                  = analogRead(RAIN_PIN);
+    sendDoc["temp"]                  = temp;
+    sendDoc["humidity"]              = humidity;
+    sendDoc["water_dist"]            = waterDistance;
+    sendDoc["tank_status"]           = tankEmpty ? "EMPTY" : "OK";
+    sendDoc["device_url"]            = laravel_api_url;
+    sendDoc["device_tank_height_cm"] = tankHeightCm;
 
     String jsonString;
     serializeJson(sendDoc, jsonString);
