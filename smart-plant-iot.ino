@@ -10,7 +10,7 @@
 #define RAIN_PIN   32
 #define DHTPIN     4
 #define DHTTYPE    DHT22  // Change to DHT11 if your sensor is a DHT11
-#define RELAY_PIN  25
+#define RELAY_PIN  2
 #define TRIG_PIN   5   // Ultrasonic Trig
 #define ECHO_PIN   18  // Ultrasonic Echo
 
