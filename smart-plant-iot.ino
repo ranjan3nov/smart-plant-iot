@@ -251,6 +251,7 @@ void loop() {
     http.setTimeout(5000);
     http.begin(laravel_api_url);
     http.addHeader("Content-Type", "application/json");
+    http.addHeader("Accept", "application/json");
 
     StaticJsonDocument<512> sendDoc;
     sendDoc["moisture"]              = analogRead(SOIL_PIN);
