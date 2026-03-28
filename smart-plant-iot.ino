@@ -9,8 +9,8 @@
 #define SOIL_PIN   34
 #define RAIN_PIN   32
 #define DHTPIN     4
-#define DHTTYPE    DHT22  // Change to DHT11 if your sensor is a DHT11
-#define RELAY_PIN  2
+#define DHTTYPE    DHT22  
+#define RELAY_PIN  25  // GPIO25
 #define TRIG_PIN   5   // Ultrasonic Trig
 #define ECHO_PIN   18  // Ultrasonic Echo
 
@@ -22,8 +22,8 @@ DHT dht(DHTPIN, DHTTYPE);
 WebServer server(80);
 String laravel_api_url = DEFAULT_API_URL;
 String lastStatus = "Waiting for first sync...";
-long currentInterval = 300000; // ms — updated by server each cycle
-float tankHeightCm   = 20.0;  // cm — loaded from /api/config on boot
+long currentInterval = 5000; // ms — starts at 5s for quick first POST, then server controls
+float tankHeightCm   = 13.0;  // cm — loaded from /api/config on boot
 
 // --- Ultrasonic: returns distance in cm ---
 float getWaterLevel() {
@@ -78,12 +78,15 @@ void fetchConfig() {
 }
 
 void setup() {
-  Serial.begin(115200);
-  dht.begin();
+  // Kill relay FIRST — GPIO2 boots HIGH which would turn pump ON immediately
   pinMode(RELAY_PIN, OUTPUT);
+  digitalWrite(RELAY_PIN, HIGH); // HIGH = pump OFF (active-LOW relay)
+
+  Serial.begin(115200);
+  delay(2000); // DHT22 needs ~2s warm-up after power-on before first valid reading
+  dht.begin();
   pinMode(TRIG_PIN, OUTPUT);
   pinMode(ECHO_PIN, INPUT);
-  digitalWrite(RELAY_PIN, LOW);
 
   if (!LittleFS.begin(true)) {
     Serial.println("LittleFS mount failed");
@@ -105,8 +108,10 @@ void setup() {
   }
 
   WiFiManager wm;
+  wm.setDebugOutput(false); // Reduces LED activity on GPIO2
   if (!wm.autoConnect("Smart-Plant")) ESP.restart();
 
+  digitalWrite(RELAY_PIN, HIGH); // Re-assert pump OFF after WiFiManager (active-LOW relay)
   Serial.println("WiFi connected. API URL: " + laravel_api_url);
   fetchConfig();
 
@@ -239,13 +244,6 @@ void loop() {
     float humidity      = dht.readHumidity();
     float waterDistance = getWaterLevel();
 
-    // Validate DHT reading before sending
-    if (isnan(temp) || isnan(humidity)) {
-      lastStatus = "DHT read failed — skipping";
-      Serial.println(lastStatus);
-      return;
-    }
-
     // SAFETY: tank empty if sensor timed out (0) or distance exceeds threshold
     bool tankEmpty = (waterDistance <= 0 || waterDistance > tankHeightCm);
 
@@ -282,10 +280,10 @@ void loop() {
       if (!err) {
         // Only turn ON if server says so AND tank is NOT empty
         if (recvDoc["pump"] == "ON" && !tankEmpty) {
-          digitalWrite(RELAY_PIN, HIGH);
+          digitalWrite(RELAY_PIN, LOW);  // LOW = ON (active-LOW relay)
           lastStatus = "Pump ON (at " + String(millis() / 1000) + "s)";
         } else {
-          digitalWrite(RELAY_PIN, LOW);
+          digitalWrite(RELAY_PIN, HIGH); // HIGH = OFF (active-LOW relay)
           lastStatus = "Pump OFF (at " + String(millis() / 1000) + "s)";
         }
 
@@ -294,12 +292,12 @@ void loop() {
         currentInterval = serverInterval * 1000L;
         Serial.println("Next interval: " + String(serverInterval) + "s");
       } else {
-        digitalWrite(RELAY_PIN, LOW); // Safe default on parse failure
+        digitalWrite(RELAY_PIN, HIGH); // Safe default on parse failure — pump OFF (active-LOW)
         lastStatus = "JSON parse error — pump OFF";
         Serial.println("JSON error: " + String(err.c_str()));
       }
     } else {
-      digitalWrite(RELAY_PIN, LOW); // Safe default on HTTP failure
+      digitalWrite(RELAY_PIN, HIGH); // Safe default on HTTP failure — pump OFF (active-LOW)
       lastStatus = "HTTP error: " + String(httpCode);
       Serial.println(lastStatus);
     }
