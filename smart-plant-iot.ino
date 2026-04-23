@@ -15,8 +15,8 @@
 #define ECHO_PIN   18  // Ultrasonic Echo
 
 // -- Default API URL (fallback if no config saved in flash) --
-const String DEFAULT_API_URL   = "http://10.52.144.50:8000/api/sensor-data";
-const String DEFAULT_CONFIG_URL = "http://10.52.144.50:8000/api/config";
+const String DEFAULT_API_URL   = "http://172.16.20.50:8000/api/sensor-data";
+const String DEFAULT_CONFIG_URL = "http://172.16.20.50:8000/api/config";
 
 DHT dht(DHTPIN, DHTTYPE);
 WebServer server(80);
@@ -24,6 +24,10 @@ String laravel_api_url = DEFAULT_API_URL;
 String lastStatus = "Waiting for first sync...";
 long currentInterval = 5000; // ms — starts at 5s for quick first POST, then server controls
 float tankHeightCm   = 13.0;  // cm — loaded from /api/config on boot
+
+// -- Hardware safety cap --
+unsigned long pumpOnStartMs        = 0;                      // millis() when pump turned ON; 0 = pump is OFF
+const unsigned long PUMP_MAX_ON_MS = 10UL * 60UL * 1000UL;  // 10-minute hard cap — pump forced OFF regardless of server
 
 // --- Ultrasonic: returns distance in cm ---
 float getWaterLevel() {
@@ -174,6 +178,18 @@ void setup() {
     html += "<div class='row'><span class='label'>Temperature</span><span class='value'>" + String(dht.readTemperature()) + " &deg;C</span></div>";
     html += "<div class='row'><span class='label'>Humidity</span><span class='value'>" + String(dht.readHumidity()) + " %</span></div>";
     html += "<div class='row'><span class='label'>Last sync</span><span class='value'>" + lastStatus + "</span></div>";
+
+    // Show pump cap countdown if pump is currently ON
+    if (pumpOnStartMs > 0) {
+      unsigned long elapsed = millis() - pumpOnStartMs;
+      unsigned long remaining = (PUMP_MAX_ON_MS > elapsed) ? (PUMP_MAX_ON_MS - elapsed) / 1000 : 0;
+      html += "<div class='row'><span class='label'>Pump cap</span>"
+              "<span class='value warn'>" + String(remaining) + "s until forced OFF</span></div>";
+    } else {
+      html += "<div class='row'><span class='label'>Pump cap</span>"
+              "<span class='value'>Inactive</span></div>";
+    }
+
     html += "</div>";
 
     // --- Actions ---
@@ -233,6 +249,17 @@ void setup() {
 void loop() {
   server.handleClient();
 
+  // Hardware safety cap — runs every loop iteration, not just on poll.
+  // If pump has been ON for more than 10 minutes, force it OFF immediately
+  // regardless of what the server last said. Protects against server hanging
+  // or connection loss mid-irrigation.
+  if (pumpOnStartMs > 0 && (millis() - pumpOnStartMs) >= PUMP_MAX_ON_MS) {
+    digitalWrite(RELAY_PIN, HIGH); // force pump OFF (active-LOW relay)
+    pumpOnStartMs = 0;
+    lastStatus = "Safety cap: pump forced OFF after 10 min";
+    Serial.println("SAFETY CAP: pump forced OFF after 10 min");
+  }
+
   static unsigned long lastTime = 0;
   // Interval is set dynamically by the server:
   //   20s  — alert mode (soil dry, pump running, or tank empty)
@@ -282,9 +309,11 @@ void loop() {
         // Only turn ON if server says so AND tank is NOT empty
         if (recvDoc["pump"] == "ON" && !tankEmpty) {
           digitalWrite(RELAY_PIN, LOW);  // LOW = ON (active-LOW relay)
+          if (pumpOnStartMs == 0) pumpOnStartMs = millis(); // start cap timer on first ON
           lastStatus = "Pump ON (at " + String(millis() / 1000) + "s)";
         } else {
           digitalWrite(RELAY_PIN, HIGH); // HIGH = OFF (active-LOW relay)
+          pumpOnStartMs = 0;             // reset cap timer
           lastStatus = "Pump OFF (at " + String(millis() / 1000) + "s)";
         }
 
@@ -294,11 +323,13 @@ void loop() {
         Serial.println("Next interval: " + String(serverInterval) + "s");
       } else {
         digitalWrite(RELAY_PIN, HIGH); // Safe default on parse failure — pump OFF (active-LOW)
+        pumpOnStartMs = 0;             // reset cap timer
         lastStatus = "JSON parse error — pump OFF";
         Serial.println("JSON error: " + String(err.c_str()));
       }
     } else {
       digitalWrite(RELAY_PIN, HIGH); // Safe default on HTTP failure — pump OFF (active-LOW)
+      pumpOnStartMs = 0;             // reset cap timer
       lastStatus = "HTTP error: " + String(httpCode);
       Serial.println(lastStatus);
     }
